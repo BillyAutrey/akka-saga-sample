@@ -2,14 +2,14 @@ package com.example.services
 
 import akka.actor.typed.{ActorRef, Behavior}
 import akka.actor.typed.scaladsl.{ActorContext, Behaviors}
-import com.example.CborSerializable
+import com.example.{CborSerializable, Order}
 
 import scala.util.Try
 
 object InventoryActor {
 
   case class State(items: Map[String, Int]) extends CborSerializable
-  case class ReserveItem(orderId: String, itemId: String, quantity: Int, ref: ActorRef[ReservationResponse]) extends CborSerializable
+  case class ReserveItem(order: Order, ref: ActorRef[ReservationResponse]) extends CborSerializable
   sealed trait ReservationResponse extends CborSerializable
   case class ReservationMade(orderId: String, itemId: String, quantity: Int) extends ReservationResponse
   case class ReservationFailed(orderId: String, itemId: String, quantity: Int, cause: String) extends ReservationResponse
@@ -30,9 +30,10 @@ object InventoryActor {
 
   def receive(context: ActorContext[ReserveItem], state: State): Behavior[ReserveItem] = Behaviors.receiveMessage{
     msg =>
-      val orderId = msg.orderId
-      val itemId = msg.itemId
-      val quantity = msg.quantity
+      val order = msg.order
+      val orderId = order.orderId
+      val itemId = order.item._1
+      val quantity = order.item._2
       val maybeInventory = Try(state.items(itemId))
 
       if(maybeInventory.isFailure){
