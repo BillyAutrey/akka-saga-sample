@@ -69,8 +69,7 @@ object TypedSagaActor {
           Behaviors.same
       }
     case msg =>
-      context.log.info(s"Unexpected message: $msg")
-      context.log.info("Currently awaiting inventory response")
+      context.log.warn(s"State: WaitingOnInventoryResponse.  Unexpected message: $msg")
       Behaviors.same
   }
 

@@ -24,7 +24,7 @@ object SagaExampleGuardian {
               paymentActor: ActorRef[PaymentActor.ProcessPayment],
               context: ActorContext[_]
             ): Behavior[ProcessOrder] = Behaviors.receiveMessage{ msg =>
-    val sagaActor = context.spawn(TypedSagaActor(msg.order.orderId, emailServiceActor, inventoryActor, paymentActor), msg.order.orderId)
+    val sagaActor = context.spawn(TypedSagaActor(msg.order.orderId, emailServiceActor, inventoryActor, paymentActor), s"order-${msg.order.orderId}")
     sagaActor ! TypedSagaActor.ProcessTransaction(msg.order)
     Behaviors.same
   }
