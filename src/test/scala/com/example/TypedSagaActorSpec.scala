@@ -16,9 +16,9 @@ class TypedSagaActorSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike{
       val itemId = "socks"
       val quantity = 1
       val order = Order(orderId, (itemId, quantity))
-      val emailServiceActor = testKit.createTestProbe[EmailServiceActor.SendEmail]("emailServiceActor")
-      val inventoryActor = testKit.createTestProbe[InventoryActor.ReserveItem]("inventoryActor")
-      val paymentActor = testKit.createTestProbe[PaymentActor.ProcessPayment]("paymentActor")
+      val emailServiceActor = testKit.createTestProbe[EmailServiceActor.EmailCommand]("emailServiceActor")
+      val inventoryActor = testKit.createTestProbe[InventoryActor.InventoryCommand]("inventoryActor")
+      val paymentActor = testKit.createTestProbe[PaymentActor.PaymentCommand]("paymentActor")
 
       val typedSagaActor = testKit.spawn(TypedSagaActor(orderId,emailServiceActor.ref,inventoryActor.ref, paymentActor.ref))
       typedSagaActor ! TypedSagaActor.ProcessTransaction(order)
@@ -33,9 +33,9 @@ class TypedSagaActorSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike{
       val itemId = "socks"
       val quantity = 1
       val order = Order(orderId, (itemId, quantity))
-      val emailServiceActor = testKit.createTestProbe[EmailServiceActor.SendEmail]("emailServiceActor")
-      val inventoryActor = testKit.createTestProbe[InventoryActor.ReserveItem]("inventoryActor")
-      val paymentActor = testKit.createTestProbe[PaymentActor.ProcessPayment]("paymentActor")
+      val emailServiceActor = testKit.createTestProbe[EmailServiceActor.EmailCommand]("emailServiceActor")
+      val inventoryActor = testKit.createTestProbe[InventoryActor.InventoryCommand]("inventoryActor")
+      val paymentActor = testKit.createTestProbe[PaymentActor.PaymentCommand]("paymentActor")
 
       val typedSagaActor = testKit.spawn(TypedSagaActor(orderId, emailServiceActor.ref, inventoryActor.ref, paymentActor.ref))
       typedSagaActor ! TypedSagaActor.SpanishInquisition
@@ -49,9 +49,9 @@ class TypedSagaActorSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike{
       val itemId = "socks"
       val quantity = 1
       val order = Order(orderId, (itemId, quantity))
-      val emailServiceActor = testKit.createTestProbe[EmailServiceActor.SendEmail]("emailServiceActor")
-      val inventoryActor = testKit.createTestProbe[InventoryActor.ReserveItem]("inventoryActor")
-      val paymentActor = testKit.createTestProbe[PaymentActor.ProcessPayment]("paymentActor")
+      val emailServiceActor = testKit.createTestProbe[EmailServiceActor.EmailCommand]("emailServiceActor")
+      val inventoryActor = testKit.createTestProbe[InventoryActor.InventoryCommand]("inventoryActor")
+      val paymentActor = testKit.createTestProbe[PaymentActor.PaymentCommand]("paymentActor")
 
       //create actor, and send message to get it into the right state
       val typedSagaActor = testKit.spawn(TypedSagaActor(orderId,emailServiceActor.ref,inventoryActor.ref, paymentActor.ref))
@@ -65,9 +65,9 @@ class TypedSagaActorSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike{
       val itemId = "socks"
       val quantity = 1
       val order = Order(orderId, (itemId, quantity))
-      val emailServiceActor = testKit.createTestProbe[EmailServiceActor.SendEmail]("emailServiceActor")
-      val inventoryActor = testKit.createTestProbe[InventoryActor.ReserveItem]("inventoryActor")
-      val paymentActor = testKit.createTestProbe[PaymentActor.ProcessPayment]("paymentActor")
+      val emailServiceActor = testKit.createTestProbe[EmailServiceActor.EmailCommand]("emailServiceActor")
+      val inventoryActor = testKit.createTestProbe[InventoryActor.InventoryCommand]("inventoryActor")
+      val paymentActor = testKit.createTestProbe[PaymentActor.PaymentCommand]("paymentActor")
 
       val typedSagaActor = testKit.spawn(TypedSagaActor(orderId,emailServiceActor.ref,inventoryActor.ref, paymentActor.ref))
       typedSagaActor ! TypedSagaActor.ProcessTransaction(order)

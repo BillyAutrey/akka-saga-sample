@@ -8,9 +8,9 @@ object TypedSagaActor {
 
   case class TypeState(
                         orderId: String,
-                        emailService: ActorRef[EmailServiceActor.SendEmail],
-                        inventory: ActorRef[InventoryActor.ReserveItem],
-                        payment: ActorRef[PaymentActor.ProcessPayment],
+                        emailService: ActorRef[EmailServiceActor.EmailCommand],
+                        inventory: ActorRef[InventoryActor.InventoryCommand],
+                        payment: ActorRef[PaymentActor.PaymentCommand],
                         inventoryResponseMapper: ActorRef[InventoryActor.ReservationResponse],
                         emailResponseMapper: ActorRef[EmailServiceActor.EmailServiceResponse],
                         paymentResponseWrapper: ActorRef[PaymentActor.PaymentResponse]
@@ -28,23 +28,24 @@ object TypedSagaActor {
   private final case class WrappedPaymentResponse(response: PaymentActor.PaymentResponse) extends SagaCommand
 
   def apply(
-      orderId: String,
-      emailService: ActorRef[EmailServiceActor.SendEmail],
-      inventory: ActorRef[InventoryActor.ReserveItem],
-      payment: ActorRef[PaymentActor.ProcessPayment]
-  ): Behavior[SagaCommand] = Behaviors.setup { context =>
-    ready(
-      TypeState(
-        orderId,
-        emailService,
-        inventory,
-        payment,
-        context.messageAdapter(rsp => WrappedInventoryResponse(rsp)),
-        context.messageAdapter(rsp => WrappedEmailServiceResponse(rsp)),
-        context.messageAdapter(rsp => WrappedPaymentResponse(rsp))
-      ),
-      context
-    )
+             orderId: String,
+             emailService: ActorRef[EmailServiceActor.EmailCommand],
+             inventory: ActorRef[InventoryActor.InventoryCommand],
+             payment: ActorRef[PaymentActor.PaymentCommand]
+  ): Behavior[SagaCommand] =
+    Behaviors.setup { context =>
+      ready(
+        TypeState(
+          orderId,
+          emailService,
+          inventory,
+          payment,
+          context.messageAdapter(rsp => WrappedInventoryResponse(rsp)),
+          context.messageAdapter(rsp => WrappedEmailServiceResponse(rsp)),
+          context.messageAdapter(rsp => WrappedPaymentResponse(rsp))
+        ),
+        context
+      )
   }
 
   def ready(state: TypeState, context: ActorContext[_]): Behavior[SagaCommand] = Behaviors.receiveMessage {
@@ -63,14 +64,39 @@ object TypedSagaActor {
         case InventoryActor.ReservationMade(orderId, itemId, quantity) =>
           context.log.info(s"Received item reservation for $quantity $itemId")
           state.payment ! PaymentActor.ProcessPayment(PaymentActor.Amount(1,99),orderId, state.paymentResponseWrapper)
-          Behaviors.same
-        case InventoryActor.ReservationFailed(orderId, _, _, cause) =>
+          waitingOnPaymentResponse(state, context)
+        case InventoryActor.ReservationFailed(orderId, itemId, quantity, cause) =>
           context.log.error(s"Transaction $orderId failed - $cause")
+          // take compensating action, and un-reserve item
+          state.inventory ! InventoryActor.UnreserveItem(Order(orderId, (itemId, quantity)), state.inventoryResponseMapper)
           Behaviors.same
       }
     case msg =>
       context.log.warn(s"State: WaitingOnInventoryResponse.  Unexpected message: $msg")
       Behaviors.same
+  }
+
+  def waitingOnPaymentResponse(state: TypeState, context: ActorContext[_]): Behavior[SagaCommand] = Behaviors.receiveMessage{
+    case WrappedPaymentResponse(msg) =>
+      msg match {
+        case PaymentActor.PaymentSucceeded(amount, orderId) =>
+          context.log.info(s"Payment for $orderId succeeded:  $amount")
+          state.emailService ! EmailServiceActor.SendEmail("example@gmail.com", orderId, state.emailResponseMapper)
+          ready(state, context)
+        case PaymentActor.PaymentFailed(orderId, reason) =>
+          context.log.error(s"Payment for $orderId failed:  $reason")
+          //compensating action
+          Behaviors.same
+      }
+    case msg =>
+      context.log.warn(s"State: WaitingOnPaymentResponse.  Unexpected message:  $msg")
+      Behaviors.same
+  }
+
+  def done(state: TypeState, context: ActorContext[_]): Behavior[SagaCommand] = Behaviors.receiveMessage{
+    msg =>
+      context.log.info(s"Received message $msg, but we don't care.  We're done.")
+    Behaviors.same
   }
 
 }
