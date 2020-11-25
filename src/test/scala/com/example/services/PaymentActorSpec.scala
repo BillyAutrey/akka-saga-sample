@@ -20,7 +20,7 @@ class PaymentActorSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike{
       val paymentActor = testKit.spawn(PaymentActor())
       val probe = testKit.createTestProbe[PaymentResponse]()
       paymentActor ! ProcessPayment(amount, "123", probe.ref)
-      probe.expectMessage(PaymentFailed("123","Payment amount is too high.  Must be < $500"))
+      probe.expectMessage(PaymentFailed("123",amount,"Payment amount is too high.  Must be < $500"))
     }
   }
 

@@ -8,24 +8,27 @@ class InventoryActorSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike 
 
   "InventoryActor" should {
     "respond ReservationMade for a valid item and quantity" in {
+      val order = Order("123", ("socks", 1))
       val inventoryActor = testKit.spawn(InventoryActor())
       val probe = testKit.createTestProbe[InventoryActor.ReservationResponse]()
-      inventoryActor ! InventoryActor.ReserveItem(Order("123", ("socks", 1)), probe.ref)
-      probe.expectMessage(InventoryActor.ReservationMade("123","socks", 1))
+      inventoryActor ! InventoryActor.ReserveItem(order, probe.ref)
+      probe.expectMessage(InventoryActor.ReservationMade(order))
     }
 
     "respond ReservationFailed for an invalid item" in {
+      val order = Order("123", ("bacon", 1))
       val inventoryActor = testKit.spawn(InventoryActor())
       val probe = testKit.createTestProbe[InventoryActor.ReservationResponse]()
-      inventoryActor ! InventoryActor.ReserveItem(Order("123", ("bacon", 1)), probe.ref)
-      probe.expectMessage(InventoryActor.ReservationFailed("123","bacon", 1, "ItemId 'bacon' was not found in inventory"))
+      inventoryActor ! InventoryActor.ReserveItem(order, probe.ref)
+      probe.expectMessage(InventoryActor.ReservationFailed(order, "ItemId 'bacon' was not found in inventory"))
     }
 
     "respond ReservationFailed for an invalid quantity" in {
+      val order = Order("123", ("socks", 100))
       val inventoryActor = testKit.spawn(InventoryActor())
       val probe = testKit.createTestProbe[InventoryActor.ReservationResponse]()
-      inventoryActor ! InventoryActor.ReserveItem(Order("123", ("socks", 100)), probe.ref)
-      probe.expectMessage(InventoryActor.ReservationFailed("123","socks", 100, "Not enough inventory"))
+      inventoryActor ! InventoryActor.ReserveItem(order, probe.ref)
+      probe.expectMessage(InventoryActor.ReservationFailed(order, "Not enough inventory"))
     }
   }
 

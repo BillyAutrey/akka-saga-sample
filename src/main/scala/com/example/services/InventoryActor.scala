@@ -9,17 +9,21 @@ import scala.util.Try
 object InventoryActor {
 
   case class State(items: Map[String, Int]) extends CborSerializable
-  sealed trait InventoryCommand extends CborSerializable
+  sealed trait InventoryCommand extends CborSerializable {
+    def order: Order
+  }
+  sealed trait InventoryResponse extends CborSerializable
+
   case class ReserveItem(order: Order, ref: ActorRef[ReservationResponse]) extends InventoryCommand
-  sealed trait ReservationResponse extends CborSerializable
-  case class ReservationMade(orderId: String, itemId: String, quantity: Int) extends ReservationResponse
-  case class ReservationFailed(orderId: String, itemId: String, quantity: Int, cause: String) extends ReservationResponse
+  sealed trait ReservationResponse extends InventoryResponse
+  case class ReservationMade(order: Order) extends ReservationResponse
+  case class ReservationFailed(order: Order, cause: String) extends ReservationResponse
 
-  case class UnreserveItem(order: Order, ref: ActorRef[ReservationResponse]) extends InventoryCommand
+  case class UnreserveItem(order: Order, ref: ActorRef[UnreserveResponse]) extends InventoryCommand
 
-  sealed trait UnreserveResponse extends CborSerializable
-  case class UnreserveSucceeded(orderId: String) extends ReservationResponse
-  case class UnreserveFailed(orderId: String, reason: String) extends ReservationResponse
+  sealed trait UnreserveResponse extends InventoryResponse
+  case class UnreserveSucceeded(orderId: String) extends UnreserveResponse
+  case class UnreserveFailed(order: Order, reason: String) extends UnreserveResponse
 
   //This is not a good pattern.  For demo purposes, however, we will just create a hard-coded inventory
   val inventory = Map(
@@ -35,23 +39,34 @@ object InventoryActor {
     receive(context, State(inventory))
   }
 
-  def receive(context: ActorContext[InventoryCommand], state: State): Behavior[InventoryCommand] = Behaviors.receiveMessage{
-    case ReserveItem(order, ref) =>
-      val orderId = order.orderId
-      val itemId = order.item._1
-      val quantity = order.item._2
+  def receive(context: ActorContext[InventoryCommand], state: State): Behavior[InventoryCommand] =
+    Behaviors.receiveMessage[InventoryCommand]{ msg: InventoryCommand =>
+      val orderId = msg.order.orderId
+      val itemId = msg.order.item._1
+      val quantity = msg.order.item._2
       val maybeInventory = Try(state.items(itemId))
 
-      if(maybeInventory.isFailure){
-        ref ! ReservationFailed(orderId, itemId, quantity, s"ItemId '$itemId' was not found in inventory")
-        Behaviors.same
-      }else if(maybeInventory.getOrElse(0) >= quantity){
-        ref ! ReservationMade(orderId, itemId, quantity)
-        receive(context, State(state.items + (itemId -> (maybeInventory.get - quantity))))
-      } else {
-        ref ! ReservationFailed(orderId, itemId, quantity, "Not enough inventory")
-        Behaviors.same
+      msg match {
+        case ReserveItem(order, ref) =>
+          if (maybeInventory.isFailure) {
+            ref ! ReservationFailed(order, s"ItemId '$itemId' was not found in inventory")
+            Behaviors.same
+          } else if (maybeInventory.getOrElse(0) >= quantity) {
+            ref ! ReservationMade(order)
+            receive(context, State(state.items + (itemId -> (maybeInventory.get - quantity))))
+          } else {
+            ref ! ReservationFailed(order, "Not enough inventory")
+            Behaviors.same
+          }
+        case UnreserveItem(order, ref) =>
+          if (maybeInventory.isFailure) {
+            ref ! UnreserveFailed(order, s"Cannot restock due to missing item:  $itemId")
+            Behaviors.same
+          } else {
+            ref ! UnreserveSucceeded(orderId)
+            receive(context, State(state.items + (itemId -> (maybeInventory.get + quantity))))
+          }
       }
-  }
+    }
 
 }
