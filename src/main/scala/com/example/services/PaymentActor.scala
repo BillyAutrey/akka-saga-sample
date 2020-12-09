@@ -1,28 +1,28 @@
 package com.example.services
 
-import akka.actor.typed.{ActorRef, Behavior}
 import akka.actor.typed.scaladsl.Behaviors
+import akka.actor.typed.{ActorRef, Behavior}
 import com.example.CborSerializable
 
 object PaymentActor {
 
   case class Amount(dollars: Int, cents: Int) extends CborSerializable
-  sealed trait PaymentCommand extends CborSerializable
+  sealed trait PaymentCommand                 extends CborSerializable
 
   case class ProcessPayment(amount: Amount, orderId: String, ref: ActorRef[PaymentResponse]) extends PaymentCommand
-  case class RefundPayment(amount: Amount, orderId: String, ref: ActorRef[RefundResponse]) extends PaymentCommand
+  case class RefundPayment(amount: Amount, orderId: String, ref: ActorRef[RefundResponse])   extends PaymentCommand
 
   sealed trait PaymentResponse extends CborSerializable
 
-  sealed trait ProcessResponse extends PaymentResponse
-  case class PaymentSucceeded(amount: Amount, orderId: String) extends PaymentResponse
+  sealed trait ProcessResponse                                              extends PaymentResponse
+  case class PaymentSucceeded(amount: Amount, orderId: String)              extends PaymentResponse
   case class PaymentFailed(orderId: String, amount: Amount, reason: String) extends PaymentResponse
 
-  sealed trait RefundResponse extends PaymentResponse
-  case class RefundSucceeded(amount: Amount, orderId: String) extends RefundResponse
+  sealed trait RefundResponse                                             extends PaymentResponse
+  case class RefundSucceeded(amount: Amount, orderId: String)             extends RefundResponse
   case class RefundFailed(amount: Amount, orderId: String, cause: String) extends RefundResponse
 
-  def apply(): Behavior[PaymentCommand] = Behaviors.receiveMessage[PaymentCommand]{
+  def apply(): Behavior[PaymentCommand] = Behaviors.receiveMessage[PaymentCommand] {
     case ProcessPayment(amount, orderId, ref) =>
       amount match {
         case Amount(dollars, cents) if dollars > 500 =>

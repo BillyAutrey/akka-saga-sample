@@ -13,6 +13,9 @@ object EventSourcedSagaActor {
     def refs: Refs
   }
 
+  sealed trait Command extends CborSerializable
+  sealed trait Event   extends CborSerializable
+
   case class Refs(
                    inventoryActor: ActorRef[InventoryActor.InventoryCommand],
                    emailServiceActor: ActorRef[EmailServiceActor.EmailCommand],
@@ -22,9 +25,6 @@ object EventSourcedSagaActor {
                    paymentResponseWrapper: Option[ActorRef[PaymentActor.PaymentResponse]]
                  ) extends CborSerializable
 
-  sealed trait Command extends CborSerializable
-  sealed trait Event   extends CborSerializable
-
   final case class ReadyState(id: String, refs: Refs)              extends State
   final case class WaitingOnInventoryState(id: String, refs: Refs) extends State
   final case class WaitingOnPaymentState(id: String, refs: Refs)   extends State
@@ -33,19 +33,19 @@ object EventSourcedSagaActor {
   final case object SpanishInquisition              extends Command //Nobody expects the Spanish Inquisition!
 
   final case class ProcessTransactionReceived(order: Order) extends Event
-  final case class ReservationMadeReceived(order: Order) extends Event
+  final case class ReservationMadeReceived(order: Order)    extends Event
 
   // Adapted responses - https://doc.akka.io/docs/akka/current/typed/interaction-patterns.html#adapted-response
   private final case class WrappedEmailServiceResponse(response: EmailServiceActor.EmailServiceResponse) extends Command
-  private final case class WrappedInventoryResponse(response: InventoryActor.InventoryResponse) extends Command
-  private final case class WrappedPaymentResponse(response: PaymentActor.PaymentResponse) extends Command
+  private final case class WrappedInventoryResponse(response: InventoryActor.InventoryResponse)          extends Command
+  private final case class WrappedPaymentResponse(response: PaymentActor.PaymentResponse)                extends Command
 
   def apply(
-             entityId: String,
-             inventoryActor: ActorRef[InventoryActor.InventoryCommand],
-             emailServiceActor: ActorRef[EmailServiceActor.EmailCommand],
-             paymentActor: ActorRef[PaymentActor.PaymentCommand]
-           ): Behavior[Command] = Behaviors.setup { context =>
+      entityId: String,
+      inventoryActor: ActorRef[InventoryActor.InventoryCommand],
+      emailServiceActor: ActorRef[EmailServiceActor.EmailCommand],
+      paymentActor: ActorRef[PaymentActor.PaymentCommand]
+  ): Behavior[Command] = Behaviors.setup { context =>
     val refs = refFactory(inventoryActor, emailServiceActor, paymentActor, context)
 
     EventSourcedBehavior[Command, Event, State](
@@ -56,12 +56,37 @@ object EventSourcedSagaActor {
     )
   }
 
+  // For testing
+  def apply(partialState: State): Behavior[Command] = Behaviors.setup { context =>
+    val refs = partialState.refs match {
+      case Refs(i, e, p, None, None, None) =>
+        refFactory(i, e, p, context)
+      case valid =>
+        valid
+    }
+
+    val state = partialState match {
+      case r: ReadyState              => r.copy(refs = refs)
+      case i: WaitingOnInventoryState => i.copy(refs = refs)
+      case p: WaitingOnPaymentState   => p.copy(refs = refs)
+    }
+
+    context.log.info(s"Starting with ${state.getClass}")
+
+    EventSourcedBehavior[Command, Event, State](
+      persistenceId = PersistenceId("EventSourcedSaga", state.id),
+      emptyState = state,
+      commandHandler = commandHandler(context),
+      eventHandler = eventHandler(context)
+    )
+  }
+
   private def refFactory(
-                          inventoryActor: ActorRef[InventoryActor.InventoryCommand],
-                          emailServiceActor: ActorRef[EmailServiceActor.EmailCommand],
-                          paymentActor: ActorRef[PaymentActor.PaymentCommand],
-                          context: ActorContext[Command]
-                        ): Refs =
+      inventoryActor: ActorRef[InventoryActor.InventoryCommand],
+      emailServiceActor: ActorRef[EmailServiceActor.EmailCommand],
+      paymentActor: ActorRef[PaymentActor.PaymentCommand],
+      context: ActorContext[Command]
+  ): Refs =
     Refs(
       inventoryActor,
       emailServiceActor,
@@ -96,15 +121,18 @@ object EventSourcedSagaActor {
     }
   }
 
-  def waitingOnInventoryCommandHandler(context: ActorContext[Command])(state: State, command: Command): Effect[Event, State] = {
+  def waitingOnInventoryCommandHandler(
+      context: ActorContext[Command]
+  )(state: State, command: Command): Effect[Event, State] = {
     command match {
       case WrappedInventoryResponse(response) =>
         response match {
           case InventoryActor.ReservationMade(order) =>
             Effect
               .persist(ReservationMadeReceived(order))
-              .thenRun( _ =>
-                state.refs.paymentActor ! PaymentActor.ProcessPayment(PaymentActor.Amount(1,99),order.orderId, state.refs.paymentResponseWrapper.get)
+              .thenRun(_ =>
+                state.refs.paymentActor ! PaymentActor
+                  .ProcessPayment(PaymentActor.Amount(1, 99), order.orderId, state.refs.paymentResponseWrapper.get)
               )
           case InventoryActor.ReservationFailed(order, cause) =>
             context.log.error(s"Unable to process ${order.orderId}: $cause")
@@ -116,6 +144,7 @@ object EventSourcedSagaActor {
     }
   }
 
+  // TODO
   def waitingOnPaymentCommandHandler(state: State, command: Command): Effect[Event, State] = Effect.noReply
 
   def eventHandler(context: ActorContext[Command])(state: State, event: Event): State = {
@@ -145,30 +174,5 @@ object EventSourcedSagaActor {
   }
 
   def waitingOnPaymentEventHandler(state: State, event: Event): State = state
-
-  // For testing
-  def apply(partialState: State): Behavior[Command] = Behaviors.setup { context =>
-    val refs = partialState.refs match {
-      case Refs(i, e, p, None, None, None) =>
-        refFactory(i, e, p, context)
-      case valid =>
-        valid
-    }
-
-    val state = partialState match {
-      case r: ReadyState => r.copy(refs = refs)
-      case i: WaitingOnInventoryState => i.copy(refs = refs)
-      case p: WaitingOnPaymentState => p.copy(refs = refs)
-    }
-
-    context.log.info(s"Starting with ${state.getClass}")
-
-    EventSourcedBehavior[Command, Event, State](
-      persistenceId = PersistenceId("EventSourcedSaga", state.id),
-      emptyState = state,
-      commandHandler = commandHandler(context),
-      eventHandler = eventHandler(context)
-    )
-  }
 
 }
