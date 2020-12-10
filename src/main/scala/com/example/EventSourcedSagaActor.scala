@@ -16,6 +16,7 @@ object EventSourcedSagaActor {
   sealed trait Command extends CborSerializable
   sealed trait Event   extends CborSerializable
 
+  // Case class to contain injected ActorRefs, to make it easier to pass this state around
   case class Refs(
                    inventoryActor: ActorRef[InventoryActor.InventoryCommand],
                    emailServiceActor: ActorRef[EmailServiceActor.EmailCommand],
@@ -25,15 +26,29 @@ object EventSourcedSagaActor {
                    paymentResponseWrapper: Option[ActorRef[PaymentActor.PaymentResponse]]
                  ) extends CborSerializable
 
+  // Multiple state classes, as described in "Akka EventSourced behaviors as finite state machines".
+  // See https://doc.akka.io/docs/akka/current/typed/persistence-fsm.html for more details.
   final case class ReadyState(id: String, refs: Refs)              extends State
   final case class WaitingOnInventoryState(id: String, refs: Refs) extends State
   final case class WaitingOnPaymentState(id: String, refs: Refs)   extends State
+
+  // Compensation state
+  final case class WaitingOnInventoryCompensation(id: String, refs: Refs) extends State
+  final case class WaitingOnPaymentCompensation(id: String, refs: Refs)   extends State
 
   final case class ProcessTransaction(order: Order) extends Command
   final case object SpanishInquisition              extends Command //Nobody expects the Spanish Inquisition!
 
   final case class ProcessTransactionReceived(order: Order) extends Event
   final case class ReservationMadeReceived(order: Order)    extends Event
+
+  // Failure receipt events
+  final case class TransactionFailureReceived(order: Order) extends Event
+  final case class ReservationFailureReceived(order: Order) extends Event
+
+  // Compensating action events
+  final case class InventoryCompensationReceived(orderId: String) extends Event
+  final case class InventoryCompensationFailed(orderId: String)   extends Event
 
   // Adapted responses - https://doc.akka.io/docs/akka/current/typed/interaction-patterns.html#adapted-response
   private final case class WrappedEmailServiceResponse(response: EmailServiceActor.EmailServiceResponse) extends Command
@@ -98,12 +113,14 @@ object EventSourcedSagaActor {
 
   def commandHandler(context: ActorContext[Command])(state: State, command: Command): Effect[Event, State] = {
     state match {
-      case WaitingOnInventoryState(id, refs) =>
+      case WaitingOnInventoryState(_, _) =>
         waitingOnInventoryCommandHandler(context)(state, command)
-      case WaitingOnPaymentState(id, refs) =>
+      case WaitingOnPaymentState(_, _) =>
         waitingOnPaymentCommandHandler(state, command)
       case ready: ReadyState =>
         readyCommandHandler(context)(ready, command)
+      case WaitingOnInventoryCompensation(_, _) =>
+        waitingOnInventoryCompensatingAction(context)(state, command)
     }
   }
 
@@ -113,7 +130,12 @@ object EventSourcedSagaActor {
         Effect
           .persist(ProcessTransactionReceived(order))
           .thenRun(_ =>
-            state.refs.inventoryActor ! InventoryActor.ReserveItem(order, state.refs.inventoryResponseMapper.get)
+            state.refs.inventoryResponseMapper match {
+              case Some(ref) =>
+                state.refs.inventoryActor ! InventoryActor.ReserveItem (order,ref)
+              case None =>
+                context.log.error(s"No inventory mapper available for ReserveItem")
+            }
           )
       case _ =>
         context.log.warn(s"Unexpected message in 'Ready' state:  $command")
@@ -131,12 +153,26 @@ object EventSourcedSagaActor {
             Effect
               .persist(ReservationMadeReceived(order))
               .thenRun(_ =>
-                state.refs.paymentActor ! PaymentActor
-                  .ProcessPayment(PaymentActor.Amount(1, 99), order.orderId, state.refs.paymentResponseWrapper.get)
+                state.refs.paymentResponseWrapper match {
+                  case Some(ref) =>
+                    state.refs.paymentActor ! PaymentActor
+                      .ProcessPayment (PaymentActor.Amount (1, 99), order.orderId, ref)
+                  case None =>
+                    context.log.error(s"No payment mapper available for ProcessPayment")
+                }
               )
           case InventoryActor.ReservationFailed(order, cause) =>
             context.log.error(s"Unable to process ${order.orderId}: $cause")
-            Effect.noReply
+            Effect
+              .persist(ReservationFailureReceived(order))
+              .thenRun( _ =>
+                state.refs.inventoryResponseMapper match {
+                  case Some(ref) =>
+                    state.refs.inventoryActor ! InventoryActor.UnreserveItem (order, ref)
+                  case None =>
+                    context.log.error("No inventory mapper available for UnreserveItem")
+                }
+              )
         }
       case _ =>
         context.log.warn(s"Unexpected message in 'WaitingOnInventory' state:  $command")
@@ -147,12 +183,43 @@ object EventSourcedSagaActor {
   // TODO
   def waitingOnPaymentCommandHandler(state: State, command: Command): Effect[Event, State] = Effect.noReply
 
+  // Compensating behaviors
+  def waitingOnInventoryCompensatingAction(
+      context: ActorContext[Command]
+  )(state: State, command: Command): Effect[Event, State] = command match {
+    case WrappedInventoryResponse(response) =>
+      response match {
+        case InventoryActor.UnreserveSucceeded(orderId) =>
+          Effect
+            .persist(InventoryCompensationReceived(orderId))
+        case InventoryActor.UnreserveFailed(order, reason) =>
+          context.log.error(s"Retrying failed compensating action for ${order.orderId}: $reason")
+          Effect
+            .none
+            .thenRun( _ =>
+              state.refs.inventoryResponseMapper match {
+                case Some(ref) =>
+                  state.refs.inventoryActor ! InventoryActor.UnreserveItem(order, ref)
+                case None =>
+                  context.log.error("No inventory mapper available for UnreserveItem")
+              }
+            )
+      }
+  }
+
+  def waitingOnPaymentCompensatingAction(
+      context: ActorContext[Command]
+  )(state: State, command: Command): Effect[Event, State] = Effect.noReply
+
+  // Event Handlers
   def eventHandler(context: ActorContext[Command])(state: State, event: Event): State = {
     state match {
       case WaitingOnInventoryState(id, refs) =>
         waitingOnInventoryEventHandler(state, event)
       case WaitingOnPaymentState(_, _) =>
         waitingOnPaymentEventHandler(state, event)
+      case WaitingOnInventoryCompensation(_, _) =>
+        waitingOnInventoryCompensationEventHandler(state, event)
       case ReadyState(id, refs) =>
         readyEventHandler(state, event)
     }
@@ -165,14 +232,21 @@ object EventSourcedSagaActor {
       state
   }
 
-  // Stubbed, for now
   def waitingOnInventoryEventHandler(state: State, event: Event): State = event match {
     case ReservationMadeReceived(order) =>
       WaitingOnPaymentState(state.id, state.refs)
+    case ReservationFailureReceived(order) =>
+      WaitingOnInventoryCompensation(state.id, state.refs)
     case _ =>
       state
   }
 
+  def waitingOnInventoryCompensationEventHandler(state: State, event: Event): State = event match {
+    case InventoryCompensationReceived(orderId) =>
+      ReadyState(orderId, state.refs)
+  }
+
+  // TODO
   def waitingOnPaymentEventHandler(state: State, event: Event): State = state
 
 }
